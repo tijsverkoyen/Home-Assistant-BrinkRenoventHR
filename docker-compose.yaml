@@ -1,0 +1,30 @@
+version: "3"
+
+services:
+  mosquitto:
+    container_name: mosquitto
+    image: eclipse-mosquitto:latest
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Brussels
+      - PUID=1000
+      - PGID=1000
+    volumes:
+      - './mosquitto/config:/mosquitto/config'
+      - './mosquitto/data:/mosquitto/data'
+      - './mosquitto/log:/mosquitto/log'
+    ports:
+      - '1883:1883'
+      - '9001:9001'
+
+  homeAssistant:
+    container_name: home-assistant-brink-renovent-hr
+    image: homeassistant/home-assistant:latest
+    environment:
+      - TZ=Europe/Brussels
+    volumes:
+      - './:/config'
+    ports:
+      - "8123:8123"
+    depends_on:
+      - mosquitto
