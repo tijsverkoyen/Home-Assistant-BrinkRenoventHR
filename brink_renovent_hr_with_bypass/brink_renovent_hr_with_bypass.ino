@@ -4,19 +4,19 @@
 #include <PubSubClient.h>
 
 // this part shall be changed ----------------------------------
-const char* ssid = "Your WiFi SSID";
-const char* password = "Your WiFi password";
-const char* mqtt_server = "Your MQTT broker IP address";
-const char* mqtt_client_id = "brink";  // Unique client id
-const int mqtt_Port = 1883;
-const char* mqtt_User = "Your MQTT username";
-const char* mqtt_Password = "Your MQTT password";
+const char* wifiSsid = "Your WiFi SSID";
+const char* wifiPassword = "Your WiFi password";
+const char* mqttServer = "Your MQTT broker IP address";
+const char* mqttClientId = "brink";  // Unique client id
+const int mqttPort = 1883;
+const char* mqttUser = "Your MQTT username";
+const char* mqttPassword = "Your MQTT password";
 //float maxVent = 2.49; //it means 249 m/h3 - max available flow in my Brink - not used/needed
 const unsigned long readPeriod = 1500;           // 1000 = every second; set between 1000 - 5000
 const unsigned long readPeriod_bypass = 120000;  // Set +15000 - OT disconnection needed for bypass work
 //-----------------------------------------------------------------------
 
-const char* mqtt_topic_in = "brink/+/set";  //subscribe commands from Openhab
+const char* mqttTopicIn = "brink/+/set";  //subscribe commands from Openhab
 unsigned long startTime;
 unsigned long currentTime;
 unsigned long readOT;  //
@@ -56,27 +56,24 @@ void ICACHE_RAM_ATTR handleInterrupt() {
   ot.handleInterrupt();
 }
 
-
 void MqttReconnect() {
   while (!mqttClient.connected()) {
-    Serial.println("Connecting to MQTT Broker ");
-    Serial.println(mqtt_server);
+    Serial.println("MQTT> Connecting to MQTT Broker ");
     delay(1000);
-    if (mqttClient.connect(mqtt_client_id, mqtt_User, mqtt_Password)) {
-      Serial.print("connected, topic: ");
-      mqttClient.subscribe(mqtt_topic_in);
-      Serial.println(mqtt_topic_in);
+
+    if (mqttClient.connect(mqttClientId, mqttUser, mqttPassword)) {
+      Serial.println("MQTT> Connected");
+      mqttClient.subscribe(mqttTopicIn);
+      Serial.print("MQTT> Subscribed to ");
+      Serial.println(mqttTopicIn);
     } else {
-      Serial.print("failed: ");
+      Serial.print("MQTT> failed: ");
       Serial.print(mqttClient.state());
-      Serial.println(" try again...");
+      Serial.println(", trying again ...");
       delay(5000);
     }
   }
-  Serial.println(" ok...");
 }
-
-
 
 void MqttCallback(char* topic, byte* payload, unsigned int length) {
   payload[length] = 0;
@@ -103,18 +100,23 @@ void MqttCallback(char* topic, byte* payload, unsigned int length) {
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("Start");
+  Serial.println("Start of Brink Renovent HR with Bypass program");
+
+  // Connect to WiFi
+  Serial.println("WiFi> Connecting");
   WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
+  WiFi.begin(wifiSsid, wifiPassword);
   while (WiFi.status() != WL_CONNECTED) {
     Serial.print(".");
     delay(500);
   }
-  Serial.println("");
-  Serial.print("IP Addresss :");
-  Serial.print(WiFi.localIP());
 
-  mqttClient.setServer(mqtt_server, mqtt_Port);
+  Serial.print("WiFi> Connected to WiFi. Current IP Addresss is: ");
+  Serial.println(WiFi.localIP());
+  Serial.println("");
+
+  // Connect to MQTT Broker
+  mqttClient.setServer(mqttServer, mqttPort);
   mqttClient.setCallback(MqttCallback);
   MqttReconnect();
 
