@@ -25,35 +25,30 @@ unsigned long readOT;
 const int HWCPin = 14;  // Option: HW circulation pump D5
 const int inPin = 4;    // ESP8266 D2
 const int outPin = 5;   // ESP8266 D1
+
 OpenTherm ot(inPin, outPin);
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 
-float tIn, tIn_old = 0;       // temp external
-float tOut, tOut_old = 0;     // temp internal
-bool fault, fault_old = 1;    // fault code
-bool vmode, vmode_old = 0;    // ventilation mode
-bool bypass, bypass_old = 1;  // bypass mode
-bool filter, filter_old = 1;  // filter replacement indicator
-
-int pressin, pressin_old = 0;    // pressure input duct [Pa]
-int pressout, pressout_old = 0;  // pressure output duct [Pa]
-int vstep1, vstep1_old = 50;     // U1
-int vstep2, vstep2_old = 150;    // U2
-int vstep3, vstep3_old = 300;    // U3
-int tU4, tU4_old = 1;            // U4 - atmospheric temp threshold for bypass
-int tU5, tU5_old = 1;            // U5 - inside temp threshold for bypass
-int cvol, cvol_old = 0;          // current ventilation capacity (out) [m/h3]
-int RPMin, RPMin_old;            // RPM in - not used
-int RPMout, RPMout_old;          // RPM out - not used
-int fcode, fcode_old = 0;        // fault code
-int msg, msg_old = 0;            // C-operation message
-int param1, param1_old = 100;    // I1- imbalance parameter
-long lRssi, lRssi_old = 0;       // Wifi signal level
-bool sem_bypass;                 // semaphore for bypass workaround
-int invol, invol_old = 0;        // No.6 Current input volume
-int outvol, outvol_old = 0;      // No.7 Current output volume
+int msg, msg_old = 0;            // No.0 Message code operating condition
+int cVol, cVol_old = 0;          // No.1 Current position/outlet volume [m3/h]
+bool bp, bp_old = 1;             // No.2 Bypass status
+bool sem_bp;                     // semaphore for bypass workaround
+float tP, tP_old = 0;            // No.3 Temperature from atmosphere [°C]
+float tS, tS_old = 0;            // No.4 Temperature from indoors [°C]
+int inVol, inVol_old = 0;        // No.6 Current input volume [m3/h]
+int outVol, outVol_old = 0;      // No.7 Current output volume [m3/h]
+int pressIn, pressIn_old = 0;    // No.8 Current pressure input duct [Pa]
+int pressOut, pressOut_old = 0;  // No.9 Current pressure output duct [Pa]
 int frost, frost_old = 0;        // No.10 Status frost protection
+int u4, u4_old = 1;              // U4 Minimum atmospheric temperature bypass
+int u5, u5_old = 1;              // U5 Minimum indoor temperature bypass
+int i1, i1_old = 100;            // I1 Fixed imbalance
+int fCode, fCode_old = 0;        // Fault code
+bool fault, fault_old = 1;       // Fault indication?
+bool vMode, vMode_old = 0;       // Ventilation mode
+bool filter, filter_old = 1;     // Filter dirty?
+long rssi, rssi_old = 0;         // Wifi signal strength [dB]
 
 void ICACHE_RAM_ATTR handleInterrupt() {
   ot.handleInterrupt();
@@ -81,9 +76,9 @@ void MqttCallback(char* topic, byte* payload, unsigned int length) {
   payload[length] = 0;
 
   // Setting/Changing selected Brink Renovent HR parameters
-  if (strcmp(topic, "brink/VentNomValue/set") == 0) ot.setVentilation(atoi((char*)payload));  // uint8_t
-  if (strcmp(topic, "brink/U4/set") == 0) ot.setBrinkTSP(U4, atoi((char*)payload) * 2);
-  if (strcmp(topic, "brink/U5/set") == 0) {
+  if (strcmp(topic, "brink/cvol/set") == 0) ot.setVentilation(atoi((char*)payload));  // uint8_t
+  if (strcmp(topic, "brink/u4/set") == 0) ot.setBrinkTSP(U4, atoi((char*)payload) * 2);
+  if (strcmp(topic, "brink/u5/set") == 0) {
     ot.setBrinkTSP(U5, atoi((char*)payload) * 2);
     delay(100);
     refreshAll();  // change of U5 triggers refresh of other parameters
@@ -93,167 +88,163 @@ void MqttCallback(char* topic, byte* payload, unsigned int length) {
 void MqttPublishAutoDiscovery() {
   StaticJsonDocument<400> entity;
   // never changing items
-  entity["value_template"] = "{{ value_json }}";
+  entity["val_tpl"] = "{{ value_json }}";
 
-  // 1. Diagnostic entities
-  entity["entity_category"] = "diagnostic";
+  // Temperatures
+  entity["dev_cla"] = "temperature";
+  entity["unit_of_meas"] = "°C";
 
-  // 1.1 Temperatures
-  entity["device_class"] = "temperature";
-  entity["unit_of_measurement"] = "°C";
-
-  // 1.1.1 No.3. Temperature from atmosphere
-  entity["unique_id"] = "brink_supply_in_temperature";
+  // No.3. Temperature from atmosphere [°C]
+  entity["uniq_id"] = "brink_supply_in_temperature";
   entity["name"] = "Temperature from atmosphere";
-  entity["state_topic"] = "brink/SupplyInTemperature/get";
+  entity["stat_t"] = "brink/tp/get";
   MqttPublishAutoDiscoveryMessage("homeassistant/sensor/brink_supply_in_temperature/config", entity);
 
-  // 1.1.2 No.4. Temperature from indoors
-  entity["unique_id"] = "brink_exhaust_in_temperature";
+  // No.4. Temperature from indoors [°C]
+  entity["uniq_id"] = "brink_exhaust_in_temperature";
   entity["name"] = "Temperature from indoors";
-  entity["state_topic"] = "brink/ExhaustInTemperature/get";
+  entity["stat_t"] = "brink/ts/get";
   MqttPublishAutoDiscoveryMessage("homeassistant/sensor/brink_exhaust_in_temperature/config", entity);
 
-  // 1.1.3 U4. Minimum Outside Temperature
+  // U4. Minimum Outside Temperature
   // @todo: number entity, want instelbaar
-  entity["unique_id"] = "brink_minimum_atmospheric_temperature_bypass";
+  entity["uniq_id"] = "brink_minimum_atmospheric_temperature_bypass";
   entity["name"] = "Minimum atmospheric temperature bypass";
-  entity["state_topic"] = "brink/U4/get";
+  entity["stat_t"] = "brink/u4/get";
   MqttPublishAutoDiscoveryMessage("homeassistant/sensor/brink_minimum_atmospheric_temperature_bypass/config", entity);
 
-  // 1.1.4 U5. Minimum Indoor Temperature
+  // U5. Minimum Indoor Temperature
   // @todo: number entity, want instelbaar
-  entity["unique_id"] = "brink_minimum_indoor_temperature_bypass";
+  entity["uniq_id"] = "brink_minimum_indoor_temperature_bypass";
   entity["name"] = "Minimum indoor temperature bypass";
-  entity["state_topic"] = "brink/U5/get";
+  entity["stat_t"] = "brink/u5/get";
   MqttPublishAutoDiscoveryMessage("homeassistant/sensor/brink_minimum_indoor_temperature_bypass/config", entity);
 
-  // 1.2 Pressures
-  entity["device_class"] = "pressure";
-  entity["unit_of_measurement"] = "Pa";
+  // Pressures
+  entity["dev_cla"] = "pressure";
+  entity["unit_of_meas"] = "Pa";
 
-  // 1.2.1 No.8. Current pressure input duct
-  entity["unique_id"] = "brink_current_pressure_input_duct";
+  // No.8. Current pressure input duct [Pa]
+  entity["uniq_id"] = "brink_current_pressure_input_duct";
   entity["name"] = "Current pressure input duct";
-  entity["state_topic"] = "brink/CPID/get";
+  entity["stat_t"] = "brink/pressin/get";
   MqttPublishAutoDiscoveryMessage("homeassistant/sensor/brink_current_pressure_input_duct/config", entity);
 
-  // 1.2.1 No.9. Current Pressure Output Duct
-  entity["unique_id"] = "brink_current_pressure_output_duct";
+  // No.9. Current pressure output duct [Pa]
+  entity["uniq_id"] = "brink_current_pressure_output_duct";
   entity["name"] = "Current pressure output duct";
-  entity["state_topic"] = "brink/CPOD/get";
+  entity["stat_t"] = "brink/CPOD/get";
   MqttPublishAutoDiscoveryMessage("homeassistant/sensor/brink_current_pressure_output_duct/config", entity);
 
-  // 1.3 Flows
-  entity.remove("device_class");
-  entity["unit_of_measurement"] = "m³/h";
-  entity["icon"] = "mdi:wind-power";
+  // Flows
+  entity.remove("dev_cla");
+  entity["unit_of_meas"] = "m³/h";
+  entity["ic"] = "mdi:wind-power";
 
-  // 1.3.1 No.1. Current position/outlet volume
+  // No.1. Current position/outlet volume [m3/h]
   // @todo Fan entity
-  entity["unique_id"] = "brink_current_position_outlet_volume";
+  entity["uniq_id"] = "brink_current_position_outlet_volume";
   entity["name"] = "Current position/outlet volume";
-  entity["state_topic"] = "brink/CurrentVolume/get";
+  entity["stat_t"] = "brink/cvol/get";
   MqttPublishAutoDiscoveryMessage("homeassistant/sensor/brink_current_position_outlet_volume/config", entity);
 
-  // 1.3.2 No.7. Current input volume
-  entity["unique_id"] = "brink_current_input_volume";
+  // No.7. Current input volume [m3/h]
+  entity["uniq_id"] = "brink_current_input_volume";
   entity["name"] = "Current input volume";
-  entity["state_topic"] = "brink/CurrentInputVol/get";
+  entity["stat_t"] = "brink/invol/get";
   MqttPublishAutoDiscoveryMessage("homeassistant/sensor/brink_current_input_volume/config", entity);
 
-  // 1.3.3 No.8. Current output volume
-  entity["unique_id"] = "brink_current_output_volume";
+  // No.8. Current output volume [m3/h]
+  entity["uniq_id"] = "brink_current_output_volume";
   entity["name"] = "Current output volume";
-  entity["state_topic"] = "brink/CurrentOutputVol/get";
+  entity["stat_t"] = "brink/outvol/get";
   MqttPublishAutoDiscoveryMessage("homeassistant/sensor/brink_current_output_volume/config", entity);
+  entity.remove("unit_of_meas");
+  entity.remove("ic");
 
-  entity.remove("unit_of_measurement");
-  entity.remove("icon");
+  // Faults
+  entity["ic"] = "mdi:alert-circle";
 
-  // 1.4 Fault
-  entity["icon"] = "mdi:alert-circle";
   // 1.4.1 Fault Indication
-  entity["unique_id"] = "brink_fault_indication";
+  entity["uniq_id"] = "brink_fault_indication";
   entity["name"] = "Fault Indication";
-  entity["state_topic"] = "brink/FaultIndication/get";
+  entity["stat_t"] = "brink/fault/get";
   MqttPublishAutoDiscoveryMessage("homeassistant/sensor/brink_fault_indication/config", entity);
 
-  // 1.4.2 Fault Code
-  entity["unique_id"] = "brink_fault_code";
+  // Fault Code
+  entity["uniq_id"] = "brink_fault_code";
   entity["name"] = "Fault Code";
-  entity["state_topic"] = "brink/FaultCode/get";
+  entity["stat_t"] = "brink/fcode/get";
   MqttPublishAutoDiscoveryMessage("homeassistant/sensor/brink_fault_code/config", entity);
-  entity.remove("icon");
+  entity.remove("ic");
 
-  // 1.5 Strings
-  // 1.5.1 Ventilation Mode
-  entity["unique_id"] = "brink_ventilation_mode";
+  // Strings
+  // Ventilation Mode
+  entity["uniq_id"] = "brink_ventilation_mode";
   entity["name"] = "Ventilation Mode";
-  entity["state_topic"] = "brink/VentilationMode/get";
+  entity["stat_t"] = "brink/vmode/get";
   MqttPublishAutoDiscoveryMessage("homeassistant/sensor/brink_ventilation_mode/config", entity);
 
-  // 1.5.2 No.2. Bypass Status
+  // No.2. Bypass Status
   // 0 = bypass valve shut
   // 1 = bypass valve automatic
   // 2 = input at minimum
-  entity["device_class"] = "enum";
-  entity["options"][0] = "bypass valve shut";
-  entity["options"][1] = "bypass valve automatic";
-  entity["options"][2] = "input at minimum";
-  entity["unique_id"] = "brink_bypass_status";
+  entity["dev_cla"] = "enum";
+  entity["ops"][0] = "bypass valve shut";
+  entity["ops"][1] = "bypass valve automatic";
+  entity["ops"][2] = "input at minimum";
+  entity["uniq_id"] = "brink_bypass_status";
   entity["name"] = "Bypass Status";
-  entity["state_topic"] = "brink/BypassStatus/get";
+  entity["stat_t"] = "brink/bp/get";
   MqttPublishAutoDiscoveryMessage("homeassistant/sensor/brink_bypass_status/config", entity);
-  entity.remove("device_class");
-  entity.remove("options");
-  
-   // 1.5.4 No.0. Message code operating condition
-  entity["unique_id"] = "brink_message_code_operating_condition";
+  entity.remove("dev_cla");
+  entity.remove("ops");
+
+  // No.0. Message code operating condition
+  entity["uniq_id"] = "brink_message_code_operating_condition";
   entity["name"] = "Message code operating condition";
-  entity["state_topic"] = "brink/MCOC/get";
+  entity["stat_t"] = "brink/MCOC/get";
   MqttPublishAutoDiscoveryMessage("homeassistant/sensor/brink_message_code_operating_condition/config", entity);
 
-  // 1.5.5 I1. Fixed imbalance
-  entity["unique_id"] = "brink_i1";
+  // I1. Fixed imbalance
+  entity["uniq_id"] = "brink_i1";
   entity["name"] = "Fixed imbalance";
-  entity["state_topic"] = "brink/I1/get";
+  entity["stat_t"] = "brink/i1/get";
   MqttPublishAutoDiscoveryMessage("homeassistant/sensor/brink_i1/config", entity);
 
-  // 1.5.6 Status frost protection
-  entity["unique_id"] = "brink_frost_protection";
+  // No.10 Status frost protection
+  entity["uniq_id"] = "brink_frost_protection";
   entity["name"] = "Status frost protection";
-  entity["state_topic"] = "brink/FrostStatus/get";
+  entity["stat_t"] = "brink/frost/get";
   MqttPublishAutoDiscoveryMessage("homeassistant/sensor/brink_frost_protection/config", entity);
 
-  // 1.6 Binary
-  // 1.6.1 Filter Dirty
-  entity["device_class"] = "problem";
-  entity["unique_id"] = "brink_filter_dirty";
+  // Binary
+  // Filter Dirty
+  entity["dev_cla"] = "problem";
+  entity["uniq_id"] = "brink_filter_dirty";
   entity["name"] = "Filter Dirty";
-  entity["state_topic"] = "brink/FilterDirty/get";
+  entity["stat_t"] = "brink/filter/get";
   MqttPublishAutoDiscoveryMessage("homeassistant/binary_sensor/brink_filter_dirty/config", entity);
 
-  // 1.x Signal Strengths
-  // 1.x.1 WiFi Signal Strenght
-  entity["device_class"] = "signal_strength";
-  entity["unit_of_measurement"] = "dB";
-  entity["unique_id"] = "brink_wifi_rsi";
+  // Signal Strengths
+  // Wifi signal strength
+  entity["dev_cla"] = "signal_strength";
+  entity["unit_of_meas"] = "dB";
+  entity["uniq_id"] = "brink_wifi_rsi";
   entity["name"] = "WiFi RSI";
-  entity["state_topic"] = "brink/Wifi/get";
+  entity["stat_t"] = "brink/Wifi/get";
   MqttPublishAutoDiscoveryMessage("homeassistant/sensor/brink_wifi_rssi/config", entity);
 }
 
 void MqttPublishAutoDiscoveryMessage(const char* topic, JsonDocument& payload) {
-  payload["device"]["identifiers"][0] = "brink_renovent_hr";
-  payload["device"]["manufacturer"] = "Brink";
-  payload["device"]["model"] = "Renovent HR";
-  payload["device"]["name"] = "Brink Renovent HR";
+  payload["dev"]["ids"][0] = "brink_renovent_hr";
+  payload["dev"]["mf"] = "Brink";
+  payload["dev"]["mdl"] = "Renovent HR";
+  payload["dev"]["name"] = "Brink Renovent HR";
 
   char buffer[512];
   size_t n = serializeJson(payload, buffer);
   mqttClient.publish(topic, buffer);
-  Serial.print("Brink> Publishing message");
 }
 
 void setup() {
@@ -270,7 +261,6 @@ void setup() {
 
   Serial.print("WiFi> Connected to WiFi. Current IP Address is: ");
   Serial.println(WiFi.localIP());
-  Serial.println("");
 
   // Connect to MQTT Broker
   mqttClient.setServer(mqttServer, mqttPort);
@@ -283,29 +273,45 @@ void setup() {
 
   ReadBrinkParameters();
   refreshAll();
-  sem_bypass = bypass;
-  if (bypass == 1) readOT = readPeriod_bypass;
+  sem_bp = bp;
+  if (bp == 1) readOT = readPeriod_bypass;
   else readOT = readPeriod;
 }
 
 // refresh slow changing parameters on request by every change of U5
 void refreshAll() {
-  mqttClient.publish("brink/SupplyInTemperature/get", String(tIn).c_str());
-  mqttClient.publish("brink/ExhaustInTemperature/get", String(tOut).c_str());
-  mqttClient.publish("brink/FaultIndication/get", String(fault).c_str());
-  mqttClient.publish("brink/VentilationMode/get", String(vmode).c_str());
-  mqttClient.publish("brink/BypassStatus/get", String(bypass).c_str());
-  mqttClient.publish("brink/FilterDirty/get", String(filter).c_str());
-  mqttClient.publish("brink/CurrentVolume/get", String(cvol * maxVent).c_str());
-  mqttClient.publish("brink/FaultCode/get", String(fcode).c_str());
-  mqttClient.publish("brink/OperationMsg/get", String(msg).c_str());
-  mqttClient.publish("brink/I1/get", String(param1).c_str());
-  mqttClient.publish("brink/U1/get", String(vstep1).c_str());
-  mqttClient.publish("brink/U2/get", String(vstep2).c_str());
-  mqttClient.publish("brink/U3/get", String(vstep3).c_str());
-  mqttClient.publish("brink/U4/get", String(tU4 / 2).c_str());
-  mqttClient.publish("brink/U5/get", String(tU5 / 2).c_str());
-  mqttClient.publish("brink/Wifi/get", String(lRssi).c_str());
+  // No.0 Message code operating condition
+  mqttClient.publish("brink/msg/get", String(msg).c_str());
+  // No.1 Current position/outlet volume [m3/h]
+  mqttClient.publish("brink/cvol/get", String(cVol * maxVent).c_str());
+  // No.2 Bypass status
+  mqttClient.publish("brink/bp/get", String(bp).c_str());
+  // No.3 Temperature from atmosphere [°C]
+  mqttClient.publish("brink/tp/get", String(tP).c_str());
+  // No.4 Temperature to atmosphere [°C]
+  mqttClient.publish("brink/ts/get", String(tS).c_str());
+
+  // U4 Minimum atmospheric temperature bypass
+  mqttClient.publish("brink/u4/get", String(u4 / 2).c_str());
+  // U5 Minimum indoor temperature bypass
+  mqttClient.publish("brink/u5/get", String(u5 / 2).c_str());
+
+  // I1 Fixed imbalance
+  mqttClient.publish("brink/i1/get", String(i1).c_str());
+
+  // Fault code
+  mqttClient.publish("brink/fcode/get", String(fCode).c_str());
+  // Fault indication?
+  mqttClient.publish("brink/fault/get", String(fault).c_str());
+
+  // Ventilation mode
+  mqttClient.publish("brink/vmode/get", String(vMode).c_str());
+
+  // Filter Dirty?
+  mqttClient.publish("brink/filter/get", String(filter).c_str());
+
+  // Wifi signal strength
+  mqttClient.publish("brink/wifi/get", String(rssi).c_str());
 }
 
 void loop() {
@@ -319,29 +325,29 @@ void loop() {
   if (currentTime - startTime >= readOT) {
     ReadBrinkParameters();
 
-    // Publish WiFi signal strength
-    lRssi = WiFi.RSSI();
-    if (abs(lRssi - lRssi_old) > 2) {
-      mqttClient.publish("brink/Wifi/get", String(lRssi).c_str());
-      lRssi_old = lRssi;
+    // Wifi signal strength
+    rssi = WiFi.RSSI();
+    if (abs(rssi - rssi_old) > 2) {
+      mqttClient.publish("brink/wifi/get", String(rssi).c_str());
+      rssi_old = rssi;
     }
 
     // Workaround for bypass change and keeping change when U4 and U5 conditions are met
     // Bypass is CLOSED
-    if (sem_bypass == 0) {
-      if ((tOut > tU5 / 2) && (tIn > tU4 / 2) && (tIn < tOut)) {  // if true open bypass,
-        delay(150000);                                            // stop 2,5 min
+    if (sem_bp == 0) {
+      if ((tS > u5 / 2) && (tP > u4 / 2) && (tP < tS)) {  // if true open bypass,
+        delay(150000);                                     // stop 2,5 min
         readOT = readPeriod_bypass;
-        sem_bypass = 1;
+        sem_bp = 1;
       }
     }
 
     // Bypass is OPEN
-    if (sem_bypass == 1) {
-      if ((tOut < tU5 / 2) || (tIn < tU4 / 2) || (tIn > tOut)) {  // if true close bypass
-        delay(150000);                                            // stop 2,5 min
+    if (sem_bp == 1) {
+      if ((tS < u5 / 2) || (tP < u4 / 2) || (tP > tS)) {  // if true close bypass
+        delay(150000);                                     // stop 2,5 min
         readOT = readPeriod;
-        sem_bypass = 0;
+        sem_bp = 0;
       }
     }
     startTime = currentTime;
@@ -350,123 +356,122 @@ void loop() {
 
 // Reading all requested Brink HR parameters, MQTT publication only happens if a value has changed
 void ReadBrinkParameters() {
-  tIn = ot.getVentSupplyInTemperature();
-  if (abs(tIn - tIn_old) > 0.2) {  // Reduce data publication due frequent slight changes of temp
-    mqttClient.publish("brink/SupplyInTemperature/get", String(tIn).c_str());
-    tIn_old = tIn;
-  }
-
-  tOut = ot.getVentExhaustInTemperature();
-  if (abs(tOut - tOut_old) > 0.2) {  // Reduce data publication due frequent slight changes of temp
-    mqttClient.publish("brink/ExhaustInTemperature/get", String(tOut).c_str());
-    tOut_old = tOut;
-  }
-
-  fault = ot.getFaultIndication();
-  if (fault != fault_old) {
-    mqttClient.publish("brink/FaultIndication/get", String(fault).c_str());
-    fault_old = fault;
-  }
-
-  vmode = ot.getVentilationMode();
-  if (vmode != vmode_old) {
-    mqttClient.publish("brink/VentilationMode/get", String(vmode).c_str());
-    vmode_old = vmode;
-  }
-
-  bypass = ot.getBrinkTSP(BypassStatus);  // ot.getBypassStatus() - this method does not work
-  if (bypass != bypass_old) {
-    mqttClient.publish("brink/BypassStatus/get", String(bypass).c_str());
-    bypass_old = bypass;
-  }
-
-  filter = ot.getDiagnosticIndication();
-  if (filter != filter_old) {
-    mqttClient.publish("brink/FilterDirty/get", String(filter).c_str());
-    filter_old = filter;
-  }
-
-  pressin = ot.getBrink2TSP(CPID);
-  if (abs(pressin - pressin_old) > 1) {  // Reduce data publication due frequent slight changes of pressure
-    mqttClient.publish("brink/CPID/get", String(pressin).c_str());
-    pressin_old = pressin;
-  }
-
-  pressout = ot.getBrink2TSP(CPOD);
-  if (abs(pressout - pressout_old) > 1) {  // Reduce data publication due frequent slight changes of pressure
-    mqttClient.publish("brink/CPOD/get", String(pressout).c_str());
-    pressout_old = pressout;
-  }
-
-  cvol = ot.getBrinkTSP(CurrentVol);
-  if (cvol != cvol_old) {
-    mqttClient.publish("brink/CurrentVolume/get", String(cvol).c_str());
-    cvol_old = cvol;
-  }
-
-  fcode = ot.getVentFaultCode();
-  if (fcode != fcode_old) {
-    mqttClient.publish("brink/FaultCode/get", String(fcode).c_str());
-    fcode_old = fcode;
-  }
-
-  vstep1 = ot.getBrinkTSP(U1);
-  if (vstep1 != vstep1_old) {
-    mqttClient.publish("brink/U1/get", String(vstep1).c_str());
-    vstep1_old = vstep1;
-  }
-
-  vstep2 = ot.getBrinkTSP(U2);
-  if (vstep2 != vstep2_old) {
-    mqttClient.publish("brink/U2/get", String(vstep2).c_str());
-    vstep2_old = vstep2;
-  }
-
-  vstep3 = ot.getBrink2TSP(U3);
-  if (vstep3 != vstep3_old) {
-    mqttClient.publish("brink/U3/get", String(vstep3).c_str());
-    vstep3_old = vstep3;
-  }
-
-  tU4 = ot.getBrinkTSP(U4);
-  if (tU4 != tU4_old) {
-    mqttClient.publish("brink/U4/get", String(tU4 / 2).c_str());
-    tU4_old = tU4;
-  }
-
-  tU5 = ot.getBrinkTSP(U5);
-  if (tU5 != tU5_old) {
-    mqttClient.publish("brink/U5/get", String(tU5 / 2).c_str());
-    tU5_old = tU5;
-  }
-
+  // No.0 Message code operating condition
   msg = ot.getBrinkTSP(MsgOperation);
   if (msg != msg_old) {
-    mqttClient.publish("brink/MCOC/get", String(msg).c_str());
+    mqttClient.publish("brink/msg/get", String(msg).c_str());
     msg_old = msg;
   }
 
-  param1 = ot.getBrinkTSP(I1);
-  if (param1 != param1_old) {
-    mqttClient.publish("brink/I1/get", String(param1).c_str());
-    param1_old = param1;
+  // No.1 Current position/outlet volume [m3/h]
+  cVol = ot.getBrinkTSP(CurrentVol);
+  if (cVol != cVol_old) {
+    mqttClient.publish("brink/cvol/get", String(cVol).c_str());
+    cVol_old = cVol;
   }
 
-  invol = ot.getBrinkTSP(CurrentInputVol);
-  if (invol != invol_old) {
-    mqttClient.publish("brink/InputVolume/get", String(invol * maxVent).c_str());
-    invol_old = invol;
+  // No.2 Bypass status
+  bp = ot.getBrinkTSP(BypassStatus);
+  if (bp != bp_old) {
+    mqttClient.publish("brink/bp/get", String(bp).c_str());
+    bp_old = bp;
   }
 
-  outvol = ot.getBrinkTSP(CurrentOutputVol);
-  if (outvol != outvol_old) {
-    mqttClient.publish("brink/OutputVolume/get", String(invol * maxVent).c_str());
-    outvol_old = outvol;
+  // No.3 Temperature from atmosphere [°C]
+  tP = ot.getVentSupplyInTemperature();
+  if (abs(tP - tP_old) > 0.2) {  // Reduce data publication due frequent slight changes of temp
+    mqttClient.publish("brink/tp/get", String(tP).c_str());
+    tP_old = tP;
   }
 
+  // No.4 Temperature from indoors [°C]
+  tS = ot.getVentExhaustInTemperature();
+  if (abs(tS - tS_old) > 0.2) {  // Reduce data publication due frequent slight changes of temp
+    mqttClient.publish("brink/ts/get", String(tS).c_str());
+    tS_old = tS;
+  }
+
+  // No.6 Current input volume [m3/h]
+  inVol = ot.getBrinkTSP(CurrentInputVol);
+  if (inVol != inVol_old) {
+    mqttClient.publish("brink/invol/get", String(inVol * maxVent).c_str());
+    inVol_old = inVol;
+  }
+
+  // No.7 Current output volume [m3/h]
+  outVol = ot.getBrinkTSP(CurrentOutputVol);
+  if (outVol != outVol_old) {
+    mqttClient.publish("brink/outvol/get", String(outVol * maxVent).c_str());
+    outVol_old = outVol;
+  }
+
+  // No.8 Current pressure input duct [Pa]
+  pressIn = ot.getBrink2TSP(CPID);
+  if (abs(pressIn - pressIn_old) > 1) {  // Reduce data publication due to slight changes of pressure
+    mqttClient.publish("brink/pressin/get", String(pressIn).c_str());
+    pressIn_old = pressIn;
+  }
+
+  // No.9 Current pressure output duct [Pa]
+  pressOut = ot.getBrink2TSP(CPOD);
+  if (abs(pressOut - pressOut_old) > 1) {  // Reduce data publication due to slight changes of pressure
+    mqttClient.publish("brink/pressout/get", String(pressOut).c_str());
+    pressOut_old = pressOut;
+  }
+
+  // No.10 Status frost protection
   frost = ot.getBrinkTSP(FrostStatus);
   if (frost != frost_old) {
-    mqttClient.publish("brink/FrostStatus/get", String(frost).c_str());
+    mqttClient.publish("brink/frost/get", String(frost).c_str());
     frost_old = frost;
+  }
+
+  // U4 Minimum atmospheric temperature bypass
+  u4 = ot.getBrinkTSP(U4);
+  if (u4 != u4_old) {
+    mqttClient.publish("brink/u4/get", String(u4 / 2).c_str());
+    u4_old = u4;
+  }
+
+  // U5 Minimum indoor temperature bypass
+  u5 = ot.getBrinkTSP(U5);
+  if (u5 != u5_old) {
+    mqttClient.publish("brink/u5/get", String(u5 / 2).c_str());
+    u5_old = u5;
+  }
+
+  // I1 Fixed imbalance
+  i1 = ot.getBrinkTSP(I1);
+  if (i1 != i1_old) {
+    mqttClient.publish("brink/i1/get", String(i1).c_str());
+    i1_old = i1;
+  }
+
+  // Fault code
+  fCode = ot.getVentFaultCode();
+  if (fCode != fCode_old) {
+    mqttClient.publish("brink/fcode/get", String(fCode).c_str());
+    fCode_old = fCode;
+  }
+
+  // Fault indication?
+  fault = ot.getFaultIndication();
+  if (fault != fault_old) {
+    mqttClient.publish("brink/fault/get", String(fault).c_str());
+    fault_old = fault;
+  }
+
+  // Ventilation mode
+  vMode = ot.getVentilationMode();
+  if (vMode != vMode_old) {
+    mqttClient.publish("brink/vmode/get", String(vMode).c_str());
+    vMode_old = vMode;
+  }
+
+  // Filter dirty?
+  filter = ot.getDiagnosticIndication();
+  if (filter != filter_old) {
+    mqttClient.publish("brink/filter/get", String(filter).c_str());
+    filter_old = filter;
   }
 }
