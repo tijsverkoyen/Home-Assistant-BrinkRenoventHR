@@ -451,14 +451,14 @@ void ReadBrinkParameters() {
   }
 
   // No.8 Current pressure input duct [Pa]
-  pressIn = ot.getBrink2TSP(CPID);
+  pressIn = ot.getBrinkTSP(CPID);
   if (abs(pressIn - pressIn_old) > 1) {  // Reduce data publication due to slight changes of pressure
     mqttClient.publish("brink/pressin/get", String(pressIn).c_str());
     pressIn_old = pressIn;
   }
 
   // No.9 Current pressure output duct [Pa]
-  pressOut = ot.getBrink2TSP(CPOD);
+  pressOut = ot.getBrinkTSP(CPOD);
   if (abs(pressOut - pressOut_old) > 1) {  // Reduce data publication due to slight changes of pressure
     mqttClient.publish("brink/pressout/get", String(pressOut).c_str());
     pressOut_old = pressOut;
