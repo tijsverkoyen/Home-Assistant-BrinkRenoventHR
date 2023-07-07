@@ -349,7 +349,7 @@ void refreshAll() {
   mqttClient.publish("brink/u5/get", String(u5 / 2).c_str());
 
   // I1 Fixed imbalance
-  mqttClient.publish("brink/i1/get", String(i1).c_str());
+  mqttClient.publish("brink/i1/get", String(i1 - 100).c_str());
 
   // Fault code
   mqttClient.publish("brink/fcode/get", String(fCode).c_str());
@@ -488,7 +488,7 @@ void ReadBrinkParameters() {
   // I1 Fixed imbalance
   i1 = ot.getBrinkTSP(I1);
   if (i1 != i1_old) {
-    mqttClient.publish("brink/i1/get", String(i1).c_str());
+    mqttClient.publish("brink/i1/get", String(i1 - 100).c_str());
     i1_old = i1;
   }
 
