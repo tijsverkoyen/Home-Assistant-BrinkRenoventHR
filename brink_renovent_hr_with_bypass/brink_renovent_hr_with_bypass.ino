@@ -91,7 +91,9 @@ void MqttCallback(char* topic, byte* payload, unsigned int length) {
   }
 
   // U4. Minimum Outside Temperature
-  if (strcmp(topic, "brink/u4/set") == 0) ot.setBrinkTSP(U4, atoi((char*)payload) * 2);
+  if (strcmp(topic, "brink/u4/set") == 0) {
+    ot.setBrinkTSP(U4, atoi((char*)payload) * 2);
+  }
 
   // U5. Minimum Indoor Temperature
   if (strcmp(topic, "brink/u5/set") == 0) {
