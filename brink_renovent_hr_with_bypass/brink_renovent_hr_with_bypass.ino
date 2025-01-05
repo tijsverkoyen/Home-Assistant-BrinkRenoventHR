@@ -12,7 +12,7 @@ const char* mqttClientId = "brink";  // Unique client id
 const int mqttPort = 1883;
 const char* mqttUser = "Your MQTT username";
 const char* mqttPassword = "Your MQTT password";
-float maxVent = 2.96;                            // it means 296 m/h3 - max available flow in my Brink - not used/needed
+float maxVent = 2.96;                            // it means 296 m/h3 - max available flow in my Brink
 const unsigned long readPeriod = 1500;           // 1000 = every second; set between 1000 - 5000
 const unsigned long readPeriod_bypass = 120000;  // Set +15000 - OT disconnection needed for bypass work
 //-----------------------------------------------------------------------
